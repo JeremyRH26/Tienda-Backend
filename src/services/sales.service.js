@@ -1,12 +1,7 @@
 const salesRepository = require('../repositories/sales.repository')
+const { badRequest } = require('../utils/httpError')
 
 // Los servicios son las validaciones previas a procesar la petición
-
-function badRequest(message) {
-  const err = new Error(message)
-  err.statusCode = 400
-  return err
-}
 
 exports.createSale = async (data) => {
   if (!data.customerId) {
