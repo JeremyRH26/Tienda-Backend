@@ -1,5 +1,6 @@
 const db = require('../db/db')
 
+// parametrización y ejecución del procedimiento almacenado
 exports.createSale = async ({ customerId, products, total }) => {
   const [rows] = await db.query('CALL CreateSale(?, ?, ?)', [
     customerId,

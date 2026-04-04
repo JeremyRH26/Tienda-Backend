@@ -1,5 +1,7 @@
 const salesRepository = require('../repositories/sales.repository')
 
+// Los servicios son las validaciones previas a procesar la petición
+
 function badRequest(message) {
   const err = new Error(message)
   err.statusCode = 400
