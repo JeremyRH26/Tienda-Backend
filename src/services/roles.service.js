@@ -68,6 +68,38 @@ exports.listPermissionsByRole = async (roleIdParam) => {
   }))
 }
 
+exports.updateRole = async (roleIdParam, data) => {
+  const roleId = parseRoleId(roleIdParam)
+  if (roleId == null) {
+    throw badRequest('El id del rol no es válido')
+  }
+
+  const name = normalizeRoleName(data?.name)
+  if (!name) {
+    throw badRequest('El nombre del rol es obligatorio')
+  }
+  if (name.length > MAX_ROLE_NAME_LENGTH) {
+    throw badRequest(`El nombre del rol no puede superar ${MAX_ROLE_NAME_LENGTH} caracteres`)
+  }
+
+  const role = await rolesRepository.findRoleById(roleId)
+  if (!role) {
+    throw notFound('Rol no encontrado')
+  }
+
+  const duplicate = await rolesRepository.findRoleByName(name)
+  if (duplicate && Number(duplicate.id) !== roleId) {
+    throw conflict('Ya existe un rol con ese nombre')
+  }
+
+  const ok = await rolesRepository.updateRoleName(roleId, name)
+  if (!ok) {
+    throw notFound('Rol no encontrado')
+  }
+
+  return { id: roleId, name }
+}
+
 exports.assignPermissionsToRole = async (roleIdParam, data) => {
   const roleId = parseRoleId(roleIdParam)
   if (roleId == null) {

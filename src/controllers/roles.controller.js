@@ -41,3 +41,15 @@ exports.assignPermissions = async (req, res, next) => {
     next(error)
   }
 }
+
+exports.update = async (req, res, next) => {
+  try {
+    const result = await rolesService.updateRole(req.params.roleId, req.body)
+    res.json({
+      message: 'Rol actualizado correctamente',
+      data: result
+    })
+  } catch (error) {
+    next(error)
+  }
+}

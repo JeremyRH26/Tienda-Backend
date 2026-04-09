@@ -64,3 +64,11 @@ exports.replaceRolePermissions = async (roleId, permissionIds) => {
     JSON.stringify(permissionIds)
   ])
 }
+
+exports.updateRoleName = async (roleId, name) => {
+  const [result] = await db.query('UPDATE role SET name = ? WHERE id = ?', [
+    name,
+    roleId
+  ])
+  return result.affectedRows > 0
+}
