@@ -10,4 +10,10 @@ function unauthorized(message) {
   return err
 }
 
-module.exports = { badRequest, unauthorized }
+function conflict(message) {
+  const err = new Error(message)
+  err.statusCode = 409
+  return err
+}
+
+module.exports = { badRequest, unauthorized, conflict }
