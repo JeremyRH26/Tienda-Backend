@@ -4,4 +4,10 @@ function badRequest(message) {
   return err
 }
 
-module.exports = { badRequest }
+function unauthorized(message) {
+  const err = new Error(message)
+  err.statusCode = 401
+  return err
+}
+
+module.exports = { badRequest, unauthorized }
