@@ -16,4 +16,10 @@ function conflict(message) {
   return err
 }
 
-module.exports = { badRequest, unauthorized, conflict }
+function notFound(message) {
+  const err = new Error(message)
+  err.statusCode = 404
+  return err
+}
+
+module.exports = { badRequest, unauthorized, conflict, notFound }
