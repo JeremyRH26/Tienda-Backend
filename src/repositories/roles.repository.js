@@ -72,3 +72,9 @@ exports.updateRoleName = async (roleId, name) => {
   ])
   return result.affectedRows > 0
 }
+
+exports.deleteRoleById = async (roleId) => {
+  const [sets] = await db.query('CALL sp_role_delete(?)', [roleId])
+  const rows = firstResultSetRows(sets)
+  return Number(rows[0]?.affected ?? 0) > 0
+}

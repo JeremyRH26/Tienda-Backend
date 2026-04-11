@@ -1,5 +1,15 @@
 const rolesRepository = require('../repositories/roles.repository')
+const employeesRepository = require('../repositories/employees.repository')
 const { badRequest, conflict, notFound } = require('../utils/httpError')
+
+function isMysqlSignalError(err) {
+  return (
+    err &&
+    (err.errno === 1644 ||
+      err.code === 'ER_SIGNAL_EXCEPTION' ||
+      err.sqlState === '45000')
+  )
+}
 
 const MAX_ROLE_NAME_LENGTH = 128
 
@@ -131,4 +141,39 @@ exports.assignPermissionsToRole = async (roleIdParam, data) => {
     code: p.code,
     description: p.description
   }))
+}
+
+exports.deleteRole = async (roleIdParam) => {
+  const roleId = parseRoleId(roleIdParam)
+  if (roleId == null) {
+    throw badRequest('El id del rol no es válido')
+  }
+
+  const role = await rolesRepository.findRoleById(roleId)
+  if (!role) {
+    throw notFound('Rol no encontrado')
+  }
+
+  const activeAssigned = await employeesRepository.countActiveByRoleId(roleId)
+  if (activeAssigned > 0) {
+    throw conflict(
+      `No se puede eliminar el rol: hay ${activeAssigned} colaborador(es) activo(s) con este rol asignado.`
+    )
+  }
+
+  let ok = false
+  try {
+    ok = await rolesRepository.deleteRoleById(roleId)
+  } catch (err) {
+    if (isMysqlSignalError(err)) {
+      throw conflict(
+        err.sqlMessage || 'No se puede eliminar el rol.'
+      )
+    }
+    throw err
+  }
+
+  if (!ok) {
+    throw notFound('Rol no encontrado')
+  }
 }

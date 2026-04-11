@@ -53,3 +53,14 @@ exports.update = async (req, res, next) => {
     next(error)
   }
 }
+
+exports.remove = async (req, res, next) => {
+  try {
+    await rolesService.deleteRole(req.params.roleId)
+    res.json({
+      message: 'Rol eliminado correctamente'
+    })
+  } catch (error) {
+    next(error)
+  }
+}

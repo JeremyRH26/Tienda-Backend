@@ -73,6 +73,34 @@ BEGIN
   COMMIT;
 END$$
 
+DROP PROCEDURE IF EXISTS sp_role_delete$$
+CREATE PROCEDURE sp_role_delete(IN p_role_id INT)
+BEGIN
+  DECLARE fallback_id INT DEFAULT NULL;
+
+  IF NOT EXISTS (SELECT 1 FROM role WHERE id = p_role_id) THEN
+    SELECT 0 AS affected;
+  ELSEIF EXISTS (SELECT 1 FROM employee WHERE role_id = p_role_id AND status = 1) THEN
+    SIGNAL SQLSTATE '45000'
+      SET MESSAGE_TEXT = 'No se puede eliminar el rol: hay colaboradores activos con este rol asignado.';
+  ELSE
+    SELECT MIN(id) INTO fallback_id FROM role WHERE id <> p_role_id LIMIT 1;
+    IF EXISTS (SELECT 1 FROM employee WHERE role_id = p_role_id AND status = 0)
+       AND fallback_id IS NULL THEN
+      SIGNAL SQLSTATE '45000'
+        SET MESSAGE_TEXT = 'No se puede eliminar el único rol del sistema mientras haya colaboradores inactivos con ese rol. Crea otro rol antes.';
+    END IF;
+    UPDATE `employee`
+    SET role_id = fallback_id,
+        updated_at = NOW()
+    WHERE role_id = p_role_id
+      AND status = 0
+      AND fallback_id IS NOT NULL;
+    DELETE FROM role WHERE id = p_role_id;
+    SELECT ROW_COUNT() AS affected;
+  END IF;
+END$$
+
 DROP PROCEDURE IF EXISTS sp_permission_count_by_ids$$
 
 DELIMITER ;

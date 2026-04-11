@@ -7,5 +7,6 @@ router.get('/', rolesController.list)
 router.get('/:roleId/permissions', rolesController.listPermissionsByRole)
 router.put('/:roleId/permissions', rolesController.assignPermissions)
 router.put('/:roleId', rolesController.update)
+router.delete('/:roleId', rolesController.remove)
 
 module.exports = router
