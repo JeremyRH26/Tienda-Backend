@@ -1,4 +1,4 @@
-const bcrypt = require('bcrypt')
+const bcrypt = require('bcryptjs')
 const employeesRepository = require('../repositories/employees.repository')
 const { badRequest, conflict, notFound } = require('../utils/httpError')
 

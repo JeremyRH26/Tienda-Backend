@@ -1,4 +1,4 @@
-const bcrypt = require('bcrypt')
+const bcrypt = require('bcryptjs')
 const authRepository = require('../repositories/auth.repository')
 const { badRequest, unauthorized } = require('../utils/httpError')
 
