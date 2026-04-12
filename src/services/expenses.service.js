@@ -33,6 +33,11 @@ exports.listCategories = async () => {
   return await expensesRepository.listCategories()
 }
 
+exports.list = async () => {
+  const rows = await expensesRepository.listAll()
+  return rows.map((row) => mapExpenseRowToApi(row)).filter(Boolean)
+}
+
 exports.createCategory = async (body) => {
   const name = body.name != null ? String(body.name).trim() : ''
   if (!name) {

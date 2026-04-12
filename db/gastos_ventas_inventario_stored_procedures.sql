@@ -8,6 +8,7 @@
 --   sp_expense_category_get_or_create — busca por name (trim); si no existe, inserta
 --   sp_expense_insert                 — inserta en expense
 --   sp_expense_get_by_id              — detalle (join expense_category)
+--   sp_expense_list                   — listado completo (join expense_category, orden por fecha)
 --   sp_expense_update                 — actualiza un gasto
 --   sp_expense_delete                 — borra por id
 --
@@ -45,6 +46,7 @@ DELIMITER $$
 DROP PROCEDURE IF EXISTS sp_expense_delete$$
 DROP PROCEDURE IF EXISTS sp_expense_update$$
 DROP PROCEDURE IF EXISTS sp_expense_get_by_id$$
+DROP PROCEDURE IF EXISTS sp_expense_list$$
 DROP PROCEDURE IF EXISTS sp_expense_insert$$
 DROP PROCEDURE IF EXISTS sp_expense_category_get_or_create$$
 DROP PROCEDURE IF EXISTS sp_expense_category_list$$
@@ -143,6 +145,22 @@ BEGIN
   LIMIT 1;
 END$$
 
+-- Listado de todos los gastos (mismas columnas que get_by_id, para API GET /expenses)
+CREATE PROCEDURE sp_expense_list()
+BEGIN
+  SELECT
+    e.id,
+    e.category_id,
+    c.name AS category_name,
+    e.expense_date,
+    e.amount,
+    e.payment_method,
+    e.note
+  FROM expense e
+  INNER JOIN expense_category c ON c.id = e.category_id
+  ORDER BY e.expense_date DESC, e.id DESC;
+END$$
+
 -- Actualizar gasto (mismas columnas editables que en insert)
 CREATE PROCEDURE sp_expense_update(
   IN p_id INT,
@@ -235,6 +253,9 @@ DELIMITER ;
 --
 -- Verificar:
 --    SELECT * FROM expense ORDER BY id DESC LIMIT 1;
+--
+-- Listado:
+--    CALL sp_expense_list();
 --
 -- Detalle, edición y borrado:
 --    CALL sp_expense_get_by_id(1);

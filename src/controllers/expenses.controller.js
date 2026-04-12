@@ -1,5 +1,17 @@
 const expensesService = require('../services/expenses.service')
 
+exports.list = async (req, res, next) => {
+  try {
+    const data = await expensesService.list()
+    res.json({
+      message: 'Listado de gastos',
+      data
+    })
+  } catch (error) {
+    next(error)
+  }
+}
+
 exports.listCategories = async (req, res, next) => {
   try {
     const data = await expensesService.listCategories()

@@ -37,6 +37,12 @@ exports.listCategories = async () => {
   return rows
 }
 
+exports.listAll = async () => {
+  const [sets] = await db.query('CALL sp_expense_list()')
+  const rows = firstResultSetRows(sets)
+  return rows.map((r) => normalizeExpenseRow(r))
+}
+
 exports.insertCategory = async (name) => {
   try {
     const [result] = await db.query(
