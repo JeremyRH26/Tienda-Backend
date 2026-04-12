@@ -18,7 +18,7 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- 1) Ajustes opcionales (omitir si ya aplican)
+-- 1) Ajustes obligatorios para INSERT sin id (ver también db/fix_mysql_expense_id_autoincrement.sql)
 -- -----------------------------------------------------------------------------
 ALTER TABLE expense_category MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
 ALTER TABLE expense MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
