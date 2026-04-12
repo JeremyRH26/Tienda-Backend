@@ -51,8 +51,8 @@ exports.remove = async (req, res, next) => {
 exports.createCategory = async (req, res, next) => {
   try {
     const data = await expensesService.createCategory(req.body)
-    res.status(201).json({
-      message: 'Categoría creada',
+    res.status(200).json({
+      message: 'Categoría disponible (nueva o ya existente con el mismo nombre)',
       data
     })
   } catch (error) {

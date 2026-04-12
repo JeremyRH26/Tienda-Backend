@@ -38,11 +38,22 @@ exports.listCategories = async () => {
 }
 
 exports.insertCategory = async (name) => {
-  const [result] = await db.query(
-    'INSERT INTO expense_category (name) VALUES (?)',
-    [name]
-  )
-  return result.insertId != null ? Number(result.insertId) : null
+  try {
+    const [result] = await db.query(
+      'INSERT INTO expense_category (name) VALUES (?)',
+      [name]
+    )
+    return result.insertId != null ? Number(result.insertId) : null
+  } catch (e) {
+    if (e.code === 'ER_DUP_ENTRY') {
+      const [rows] = await db.query(
+        'SELECT id FROM expense_category WHERE name = ? LIMIT 1',
+        [name]
+      )
+      return rows[0]?.id != null ? Number(rows[0].id) : null
+    }
+    throw e
+  }
 }
 
 exports.insert = async ({

@@ -1,5 +1,5 @@
 const expensesRepository = require('../repositories/expenses.repository')
-const { badRequest, conflict, notFound } = require('../utils/httpError')
+const { badRequest, notFound } = require('../utils/httpError')
 
 function paymentMethodForApi(dbValue) {
   const x = String(dbValue || '').toLowerCase()
@@ -38,20 +38,13 @@ exports.createCategory = async (body) => {
   if (!name) {
     throw badRequest('El nombre de la categoría es obligatorio')
   }
-  try {
-    const id = await expensesRepository.insertCategory(name)
-    if (id == null) {
-      const err = new Error('No se pudo crear la categoría')
-      err.statusCode = 500
-      throw err
-    }
-    return { id, name }
-  } catch (e) {
-    if (e.code === 'ER_DUP_ENTRY') {
-      throw conflict('Ya existe una categoría con ese nombre')
-    }
-    throw e
+  const id = await expensesRepository.insertCategory(name)
+  if (id == null) {
+    const err = new Error('No se pudo crear ni resolver la categoría')
+    err.statusCode = 500
+    throw err
   }
+  return { id, name }
 }
 
 exports.getById = async (id) => {
