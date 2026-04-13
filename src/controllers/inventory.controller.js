@@ -2,7 +2,11 @@ const inventoryService = require('../services/inventory.service')
 
 exports.listCategories = async (req, res, next) => {
   try {
-    const data = await inventoryService.listCategories()
+    const rows = await inventoryService.listCategories()
+    const data = (Array.isArray(rows) ? rows : []).map((r) => ({
+      id: Number(r.id),
+      name: r.name != null ? String(r.name) : ''
+    }))
     res.json({ message: 'Categorías de producto', data })
   } catch (error) {
     next(error)
