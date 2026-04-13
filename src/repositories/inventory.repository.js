@@ -41,6 +41,16 @@ exports.listCategories = async () => {
   return Array.isArray(rows) ? rows : []
 }
 
+/** Solo lectura para selects de producto (tabla supplier). */
+exports.listSuppliers = async () => {
+  const [rows] = await db.query(
+    `SELECT id, company_name, contact_name, phone, email
+     FROM supplier
+     ORDER BY company_name ASC, id ASC`
+  )
+  return Array.isArray(rows) ? rows : []
+}
+
 exports.insertCategoryByName = async (name) => {
   const [sets] = await db.query('CALL sp_product_category_get_or_create(?)', [name])
   const rows = firstResultSetRows(sets)

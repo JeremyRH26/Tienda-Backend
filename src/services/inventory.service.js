@@ -14,6 +14,10 @@ exports.listCategories = async () => {
   return await inventoryRepository.listCategories()
 }
 
+exports.listSuppliers = async () => {
+  return await inventoryRepository.listSuppliers()
+}
+
 exports.createCategory = async (body) => {
   const name = body.name != null ? String(body.name).trim() : ''
   if (!name) {

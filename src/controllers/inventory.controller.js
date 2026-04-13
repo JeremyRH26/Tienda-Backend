@@ -43,6 +43,22 @@ exports.removeCategory = async (req, res, next) => {
   }
 }
 
+exports.listSuppliers = async (req, res, next) => {
+  try {
+    const rows = await inventoryService.listSuppliers()
+    const data = (Array.isArray(rows) ? rows : []).map((r) => ({
+      id: Number(r.id),
+      companyName: r.company_name != null ? String(r.company_name) : '',
+      contactName: r.contact_name != null ? String(r.contact_name) : '',
+      phone: r.phone != null ? String(r.phone) : null,
+      email: r.email != null ? String(r.email) : null
+    }))
+    res.json({ message: 'Proveedores (solo lectura)', data })
+  } catch (error) {
+    next(error)
+  }
+}
+
 exports.listProducts = async (req, res, next) => {
   try {
     const data = await inventoryService.listProducts(req.query)
