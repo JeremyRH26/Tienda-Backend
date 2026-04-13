@@ -116,3 +116,26 @@ exports.remove = async (id) => {
   const n = Number(rows[0]?.deleted ?? rows[0]?.DELETED ?? 0)
   return n > 0
 }
+
+exports.updateCategoryById = async (id, name) => {
+  const [result] = await db.query(
+    'UPDATE expense_category SET name = ? WHERE id = ?',
+    [name, Number(id)]
+  )
+  return result.affectedRows > 0
+}
+
+exports.countExpensesByCategory = async (categoryId) => {
+  const [rows] = await db.query(
+    'SELECT COUNT(*) AS n FROM expense WHERE category_id = ?',
+    [Number(categoryId)]
+  )
+  return Number(rows[0]?.n ?? rows[0]?.N ?? 0)
+}
+
+exports.deleteCategoryById = async (id) => {
+  const [result] = await db.query('DELETE FROM expense_category WHERE id = ?', [
+    Number(id)
+  ])
+  return result.affectedRows > 0
+}

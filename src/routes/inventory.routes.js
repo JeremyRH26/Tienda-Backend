@@ -19,6 +19,8 @@ const router = express.Router()
 
 router.get('/categories', inventoryController.listCategories)
 router.post('/categories', inventoryController.createCategory)
+router.put('/categories/:id', inventoryController.updateCategory)
+router.delete('/categories/:id', inventoryController.removeCategory)
 router.get('/products', inventoryController.listProducts)
 router.post('/products', inventoryController.create)
 router.post(

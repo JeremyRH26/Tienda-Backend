@@ -52,6 +52,58 @@ exports.createCategory = async (body) => {
   return { id, name }
 }
 
+function parseCategoryIdParam(id) {
+  const num = Number(id)
+  if (!Number.isFinite(num) || num <= 0) {
+    return null
+  }
+  return num
+}
+
+exports.updateCategory = async (categoryId, body) => {
+  const num = parseCategoryIdParam(categoryId)
+  if (num == null) {
+    throw badRequest('Id de categoría inválido')
+  }
+  const name = body.name != null ? String(body.name).trim() : ''
+  if (!name) {
+    throw badRequest('El nombre de la categoría es obligatorio')
+  }
+  try {
+    const ok = await expensesRepository.updateCategoryById(num, name)
+    if (!ok) {
+      throw notFound('Categoría no encontrada')
+    }
+    return { id: num, name }
+  } catch (e) {
+    if (e.statusCode) {
+      throw e
+    }
+    if (e.code === 'ER_DUP_ENTRY') {
+      throw badRequest('Ya existe una categoría con ese nombre')
+    }
+    throw e
+  }
+}
+
+exports.removeCategory = async (categoryId) => {
+  const num = parseCategoryIdParam(categoryId)
+  if (num == null) {
+    throw badRequest('Id de categoría inválido')
+  }
+  const cnt = await expensesRepository.countExpensesByCategory(num)
+  if (cnt > 0) {
+    throw badRequest(
+      `No se puede eliminar: hay ${cnt} gasto(s) asociados a esta categoría.`
+    )
+  }
+  const ok = await expensesRepository.deleteCategoryById(num)
+  if (!ok) {
+    throw notFound('Categoría no encontrada')
+  }
+  return { deleted: true }
+}
+
 exports.getById = async (id) => {
   const num = parseExpenseId(id)
   if (num == null) {

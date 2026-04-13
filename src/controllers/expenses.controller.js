@@ -14,7 +14,11 @@ exports.list = async (req, res, next) => {
 
 exports.listCategories = async (req, res, next) => {
   try {
-    const data = await expensesService.listCategories()
+    const rows = await expensesService.listCategories()
+    const data = (Array.isArray(rows) ? rows : []).map((r) => ({
+      id: Number(r.id),
+      name: r.name != null ? String(r.name) : ''
+    }))
     res.json({
       message: 'Categorías de gasto',
       data
@@ -67,6 +71,24 @@ exports.createCategory = async (req, res, next) => {
       message: 'Categoría disponible (nueva o ya existente con el mismo nombre)',
       data
     })
+  } catch (error) {
+    next(error)
+  }
+}
+
+exports.updateCategory = async (req, res, next) => {
+  try {
+    const data = await expensesService.updateCategory(req.params.id, req.body)
+    res.json({ message: 'Categoría actualizada', data })
+  } catch (error) {
+    next(error)
+  }
+}
+
+exports.removeCategory = async (req, res, next) => {
+  try {
+    const data = await expensesService.removeCategory(req.params.id)
+    res.json({ message: 'Categoría eliminada', data })
   } catch (error) {
     next(error)
   }

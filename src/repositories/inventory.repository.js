@@ -143,13 +143,36 @@ exports.setMinStock = async (productId, minStock) => {
 }
 
 exports.setImageUrl = async (productId, imageUrl) => {
-  const [sets] = await db.query('CALL sp_product_set_image_url(?, ?)', [
-    Number(productId),
-    imageUrl
+  const trimmed =
+    imageUrl != null && String(imageUrl).trim() !== '' ? String(imageUrl).trim() : null
+  const [result] = await db.query(
+    'UPDATE product SET image_url = ?, updated_at = NOW() WHERE id = ?',
+    [trimmed, Number(productId)]
+  )
+  return result.affectedRows > 0
+}
+
+exports.updateCategoryById = async (id, name) => {
+  const [result] = await db.query(
+    'UPDATE product_category SET name = ? WHERE id = ?',
+    [name, Number(id)]
+  )
+  return result.affectedRows > 0
+}
+
+exports.countProductsUsingCategory = async (categoryId) => {
+  const [rows] = await db.query(
+    'SELECT COUNT(*) AS n FROM product WHERE category_id = ?',
+    [Number(categoryId)]
+  )
+  return Number(rows[0]?.n ?? rows[0]?.N ?? 0)
+}
+
+exports.deleteCategoryById = async (id) => {
+  const [result] = await db.query('DELETE FROM product_category WHERE id = ?', [
+    Number(id)
   ])
-  const rows = firstResultSetRows(sets)
-  const n = Number(rows[0]?.affected ?? rows[0]?.AFFECTED ?? 0)
-  return n > 0
+  return result.affectedRows > 0
 }
 
 exports.getFirstActiveEmployeeId = async () => {

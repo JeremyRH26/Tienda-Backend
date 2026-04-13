@@ -25,6 +25,24 @@ exports.createCategory = async (req, res, next) => {
   }
 }
 
+exports.updateCategory = async (req, res, next) => {
+  try {
+    const data = await inventoryService.updateCategory(req.params.id, req.body)
+    res.json({ message: 'Categoría de producto actualizada', data })
+  } catch (error) {
+    next(error)
+  }
+}
+
+exports.removeCategory = async (req, res, next) => {
+  try {
+    const data = await inventoryService.removeCategory(req.params.id)
+    res.json({ message: 'Categoría de producto eliminada', data })
+  } catch (error) {
+    next(error)
+  }
+}
+
 exports.listProducts = async (req, res, next) => {
   try {
     const data = await inventoryService.listProducts(req.query)

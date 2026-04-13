@@ -57,14 +57,36 @@ exports.uploadProductImage = async ({ buffer, contentType, productId, originalNa
 
   const key = `products/${Number(productId)}/${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`
 
-  await clientFromConfig(cfg).send(
-    new PutObjectCommand({
-      Bucket: cfg.bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType || 'application/octet-stream'
-    })
-  )
+  try {
+    await clientFromConfig(cfg).send(
+      new PutObjectCommand({
+        Bucket: cfg.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: contentType || 'application/octet-stream'
+      })
+    )
+  } catch (e) {
+    const code = e?.name || e?.Code || ''
+    const raw = typeof e?.message === 'string' ? e.message : String(e ?? '')
+    let hint = raw
+    if (code === 'NoSuchBucket' || /NoSuchBucket/i.test(raw)) {
+      hint = `El bucket "${cfg.bucket}" no existe o el nombre no coincide con R2_BUCKET.`
+    } else if (
+      code === 'AccessDenied' ||
+      /403|AccessDenied|not authorized/i.test(raw)
+    ) {
+      hint =
+        'R2 rechazó la subida: revisa permisos del token (Object Read & Write) y el nombre del bucket.'
+    } else if (/ENOTFOUND|getaddrinfo|ECONNREFUSED/i.test(raw)) {
+      hint =
+        'No se pudo conectar a R2: verifica R2_ACCOUNT_ID y la red (endpoint de Cloudflare).'
+    }
+    const err = new Error(`Almacenamiento R2: ${hint}`)
+    err.statusCode = 502
+    err.cause = e
+    throw err
+  }
 
   const base = cfg.publicBase.replace(/\/$/, '')
   return `${base}/${key}`
