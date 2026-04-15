@@ -43,6 +43,11 @@ exports.updateCustomer = async (id, { fullName, phone, email }) => {
   return Number(row.affected ?? row.AFFECTED ?? 0)
 }
 
+exports.deleteCustomer = async (id) => {
+  const [result] = await db.query('DELETE FROM customer WHERE id = ?', [Number(id)])
+  return Number(result.affectedRows ?? 0)
+}
+
 exports.listAbonosByDateRange = async (dateStart, dateEnd) => {
   const [sets] = await db.query('CALL sp_customer_abono_list_by_date_range(?, ?)', [
     dateStart,
@@ -57,6 +62,19 @@ exports.getCustomerBalanceDue = async (customerId) => {
   const r = rows[0]
   if (!r) return 0
   return Number(r.balance_due ?? r.BALANCE_DUE ?? 0)
+}
+
+/** Suma de abonos registrados (transaction_type = 1) para un cliente. */
+exports.getTotalAbonosForCustomer = async (customerId) => {
+  const [rows] = await db.query(
+    `SELECT COALESCE(SUM(amount), 0) AS total_abonos
+     FROM customer_account
+     WHERE customer_id = ? AND transaction_type = 1`,
+    [Number(customerId)]
+  )
+  const r = rows[0]
+  if (!r) return 0
+  return Number(r.total_abonos ?? r.TOTAL_ABONOS ?? 0)
 }
 
 /** Ventas a crédito de un cliente con líneas (agrupado en Node). */

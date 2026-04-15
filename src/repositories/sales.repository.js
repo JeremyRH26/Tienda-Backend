@@ -16,29 +16,31 @@ function isServerResultMetaRow(row) {
 }
 
 /**
- * Tras CALL, mysql2 puede devolver:
- *   [ [ { sale_id, ... } ] ]  o  [ { sale_id, ... } ]  o  [ ResultSetHeader, [ rows ] ]
- * Buscamos el primer array de filas de datos.
+ * sp_sale_create devuelve antes un SELECT ... FOR UPDATE (filas con product_id).
+ * El resultado final con sale_id / total_amount va en otro bloque; hay que localizarlo.
  */
-function extractProcedureSelectRows(raw) {
+function extractSaleCreateResultRows(raw) {
   if (!raw || !Array.isArray(raw) || raw.length === 0) {
     return []
-  }
-  const head = raw[0]
-  if (Array.isArray(head)) {
-    if (head.length > 0 && !isServerResultMetaRow(head[0])) {
-      return head
-    }
-  } else if (head && typeof head === 'object' && !isServerResultMetaRow(head)) {
-    return raw
   }
   for (let i = 0; i < raw.length; i += 1) {
     const part = raw[i]
     if (!Array.isArray(part) || part.length === 0) continue
     const r0 = part[0]
-    if (r0 && typeof r0 === 'object' && !isServerResultMetaRow(r0)) {
+    if (!r0 || typeof r0 !== 'object' || isServerResultMetaRow(r0)) continue
+    if ('sale_id' in r0 || 'SALE_ID' in r0) {
       return part
     }
+  }
+  const head = raw[0]
+  if (
+    head &&
+    typeof head === 'object' &&
+    !Array.isArray(head) &&
+    !isServerResultMetaRow(head) &&
+    ('sale_id' in head || 'SALE_ID' in head)
+  ) {
+    return [head]
   }
   return []
 }
@@ -73,7 +75,7 @@ exports.createSale = async ({
     paymentMethod ?? 'cash'
   ])
 
-  const rows = extractProcedureSelectRows(raw)
+  const rows = extractSaleCreateResultRows(raw)
   const row = rows[0] ?? {}
   const sid = row.sale_id ?? row.SALE_ID
   const tam = row.total_amount ?? row.TOTAL_AMOUNT
@@ -81,6 +83,36 @@ exports.createSale = async ({
     saleId: sid != null && sid !== '' ? Number(sid) : null,
     totalAmount: tam != null && tam !== '' ? Number(tam) : null
   }
+}
+
+exports.updateSale = async ({
+  saleId,
+  customerId,
+  employeeId,
+  products,
+  total,
+  paymentMethod
+}) => {
+  const [raw] = await db.query('CALL sp_sale_update(?, ?, ?, ?, ?, ?)', [
+    Number(saleId),
+    customerId != null && customerId !== '' ? Number(customerId) : null,
+    Number(employeeId),
+    JSON.stringify(products),
+    total != null && total !== '' ? Number(total) : null,
+    paymentMethod ?? 'cash'
+  ])
+  const rows = extractSaleCreateResultRows(raw)
+  const row = rows[0] ?? {}
+  const sid = row.sale_id ?? row.SALE_ID
+  const tam = row.total_amount ?? row.TOTAL_AMOUNT
+  return {
+    saleId: sid != null && sid !== '' ? Number(sid) : null,
+    totalAmount: tam != null && tam !== '' ? Number(tam) : null
+  }
+}
+
+exports.deleteSale = async (saleId) => {
+  await db.query('CALL sp_sale_delete(?)', [Number(saleId)])
 }
 
 exports.listSalesByDateRange = async (dateStart, dateEnd) => {

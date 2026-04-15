@@ -120,6 +120,33 @@ exports.updateCustomer = async (id, body) => {
   }
 }
 
+exports.deleteCustomer = async (id) => {
+  const existing = await customersRepository.getCustomerById(id)
+  if (!existing) {
+    throw notFound('Cliente no encontrado')
+  }
+  const balanceDue = await customersRepository.getCustomerBalanceDue(id)
+  if (balanceDue > 0.009) {
+    throw badRequest(
+      'No se puede eliminar el cliente mientras tenga saldo deudor pendiente. Registre abonos hasta dejar el saldo en cero.'
+    )
+  }
+  try {
+    const n = await customersRepository.deleteCustomer(id)
+    if (n === 0) {
+      throw notFound('Cliente no encontrado')
+    }
+  } catch (e) {
+    const msg = typeof e.sqlMessage === 'string' ? e.sqlMessage : String(e.message ?? '')
+    if (msg.includes('foreign key') || msg.includes('Cannot delete')) {
+      throw badRequest(
+        'No se puede eliminar el cliente: hay datos vinculados en el sistema. Contacte al administrador.'
+      )
+    }
+    throw e
+  }
+}
+
 function groupCreditSales(rows) {
   const map = new Map()
   for (const r of rows) {
@@ -142,9 +169,41 @@ function groupCreditSales(rows) {
   return Array.from(map.values())
 }
 
+/**
+ * Aplica abonos (FIFO por fecha de venta, la más antigua primera) para obtener
+ * saldo pendiente por factura de crédito.
+ */
+function applyFifoAbonosToCreditSales(sales, totalAbonosPaid) {
+  const sorted = [...sales].sort(
+    (a, b) => new Date(a.saleDate).getTime() - new Date(b.saleDate).getTime()
+  )
+  let pool = Math.max(0, Number(totalAbonosPaid) || 0)
+  const out = []
+  for (const s of sorted) {
+    const inv = Math.round(Number(s.totalAmount ?? 0) * 100) / 100
+    const applied = Math.min(inv, pool)
+    pool = Math.round((pool - applied) * 100) / 100
+    const balanceRemaining = Math.round((inv - applied) * 100) / 100
+    if (balanceRemaining > 0.0001) {
+      out.push({
+        saleId: s.saleId,
+        saleDate: s.saleDate,
+        totalAmount: inv,
+        balanceRemaining,
+        items: s.items
+      })
+    }
+  }
+  return out
+}
+
 exports.listCreditSalesForCustomer = async (customerId) => {
   const rows = await customersRepository.listCreditSalesWithLines(customerId)
-  return groupCreditSales(Array.isArray(rows) ? rows : [])
+  const grouped = groupCreditSales(Array.isArray(rows) ? rows : [])
+  const totalAbonos = await customersRepository.getTotalAbonosForCustomer(
+    customerId
+  )
+  return applyFifoAbonosToCreditSales(grouped, totalAbonos)
 }
 
 exports.registerAbono = async (customerId, body) => {

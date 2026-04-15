@@ -74,3 +74,24 @@ exports.daySummary = async (req, res, next) => {
     next(e)
   }
 }
+
+exports.updateSale = async (req, res, next) => {
+  try {
+    const result = await salesService.updateSale(req.params.id, req.body)
+    res.json({
+      message: 'Venta actualizada',
+      data: result
+    })
+  } catch (e) {
+    next(e)
+  }
+}
+
+exports.deleteSale = async (req, res, next) => {
+  try {
+    await salesService.deleteSale(req.params.id)
+    res.json({ message: 'Venta eliminada' })
+  } catch (e) {
+    next(e)
+  }
+}

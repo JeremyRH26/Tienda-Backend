@@ -36,6 +36,15 @@ exports.update = async (req, res, next) => {
   }
 }
 
+exports.remove = async (req, res, next) => {
+  try {
+    await customersService.deleteCustomer(req.params.id)
+    res.json({ message: 'Cliente eliminado' })
+  } catch (e) {
+    next(e)
+  }
+}
+
 exports.listCreditSales = async (req, res, next) => {
   try {
     const data = await customersService.listCreditSalesForCustomer(req.params.id)

@@ -17,6 +17,8 @@
 -- Procedimientos:
 --   sp_sale_create                 — valida stock, inserta sale + sale_details, descuenta stock;
 --                                    fiado/credit exige customer_id
+--   sp_sale_update                 — misma validación que create; devuelve stock de la venta, reemplaza líneas y cabecera (sale_date no cambia)
+--   sp_sale_delete                 — elimina venta y detalle; devuelve stock
 --   CreateSale                     — compatibilidad (3 args); empleado activo más antiguo; efectivo
 --   sp_sale_list_by_date_range     — historial (todas las ventas) por rango de fechas
 --   sp_sale_get_full               — cabecera + líneas (2 result sets)
@@ -31,6 +33,9 @@
 --
 -- payment_method en BD: 'cash' | 'card' | 'credit'  (fiado = credit)
 -- customer_account.transaction_type: 1 = abono / pago a cuenta
+--
+-- Fechas/hora: sale_date usa NOW() en la sesión MySQL. Alinee la zona con DB_TIMEZONE
+-- en el backend (src/db/db.js) o SET GLOBAL time_zone en el servidor.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -51,6 +56,8 @@ DROP PROCEDURE IF EXISTS sp_customer_balance$$
 DROP PROCEDURE IF EXISTS sp_pos_day_cash_totals$$
 DROP PROCEDURE IF EXISTS sp_sale_get_full$$
 DROP PROCEDURE IF EXISTS sp_sale_list_by_date_range$$
+DROP PROCEDURE IF EXISTS sp_sale_update$$
+DROP PROCEDURE IF EXISTS sp_sale_delete$$
 DROP PROCEDURE IF EXISTS sp_sale_create$$
 DROP PROCEDURE IF EXISTS CreateSale$$
 
@@ -68,6 +75,7 @@ proc: BEGIN
   DECLARE v_computed NUMERIC(14, 4) DEFAULT 0;
   DECLARE v_stock_miss INT DEFAULT 0;
   DECLARE v_emp_ok INT DEFAULT 0;
+  DECLARE v_lock_n INT DEFAULT 0;
 
   DECLARE EXIT HANDLER FOR SQLEXCEPTION
   BEGIN
@@ -166,7 +174,8 @@ proc: BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: stock insuficiente o sin inventario';
   END IF;
 
-  SELECT t.product_id
+  /* Bloquea filas de stock sin devolver un result set al cliente (evita confundir mysql2). */
+  SELECT COUNT(*) INTO v_lock_n
   FROM tmp_sale_lines t
   INNER JOIN product_stock ps ON ps.product_id = t.product_id
   FOR UPDATE;
@@ -208,7 +217,196 @@ BEGIN
   CALL sp_sale_create(p_customer_id, v_emp, p_products, p_total, 'cash');
 END$$
 
--- p_date_start, p_date_end: inicio y fin INCLUSIVOS por DATE(sale_date) en hora del servidor MySQL.
+CREATE PROCEDURE sp_sale_delete(IN p_sale_id INT)
+proc: BEGIN
+  DECLARE v_exists INT DEFAULT 0;
+
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION
+  BEGIN
+    ROLLBACK;
+    RESIGNAL;
+  END;
+
+  IF p_sale_id IS NULL OR p_sale_id <= 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_delete: sale_id inválido';
+  END IF;
+
+  SELECT COUNT(*) INTO v_exists FROM sale WHERE id = p_sale_id;
+  IF v_exists = 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_delete: venta no encontrada';
+  END IF;
+
+  START TRANSACTION;
+
+  UPDATE product_stock ps
+  INNER JOIN sale_details sd ON sd.product_id = ps.product_id AND sd.sale_id = p_sale_id
+  SET ps.quantity = ps.quantity + sd.quantity, ps.updated_at = NOW();
+
+  DELETE FROM sale_details WHERE sale_id = p_sale_id;
+  DELETE FROM sale WHERE id = p_sale_id;
+
+  COMMIT;
+
+  SELECT 1 AS ok;
+END$$
+
+CREATE PROCEDURE sp_sale_update(
+  IN p_sale_id INT,
+  IN p_customer_id BIGINT,
+  IN p_employee_id INT,
+  IN p_products_text TEXT,
+  IN p_total NUMERIC(14, 4),
+  IN p_payment VARCHAR(20)
+)
+proc: BEGIN
+  DECLARE v_pay VARCHAR(20);
+  DECLARE v_bad INT DEFAULT 0;
+  DECLARE v_computed NUMERIC(14, 4) DEFAULT 0;
+  DECLARE v_stock_miss INT DEFAULT 0;
+  DECLARE v_emp_ok INT DEFAULT 0;
+  DECLARE v_lock_n INT DEFAULT 0;
+  DECLARE v_exists INT DEFAULT 0;
+
+  DECLARE EXIT HANDLER FOR SQLEXCEPTION
+  BEGIN
+    ROLLBACK;
+    RESIGNAL;
+  END;
+
+  IF p_sale_id IS NULL OR p_sale_id <= 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: sale_id inválido';
+  END IF;
+
+  SELECT COUNT(*) INTO v_exists FROM sale WHERE id = p_sale_id;
+  IF v_exists = 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: venta no encontrada';
+  END IF;
+
+  IF p_employee_id IS NULL OR p_employee_id <= 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: employee_id requerido';
+  END IF;
+
+  SELECT COUNT(*) INTO v_emp_ok FROM employee WHERE id = p_employee_id AND status = 1;
+  IF v_emp_ok = 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: empleado no válido o inactivo';
+  END IF;
+
+  IF p_products_text IS NULL OR TRIM(p_products_text) = '' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: productos requeridos';
+  END IF;
+
+  IF JSON_VALID(p_products_text) = 0 OR JSON_TYPE(CAST(p_products_text AS JSON)) <> 'ARRAY' THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: JSON de productos inválido';
+  END IF;
+
+  IF JSON_LENGTH(CAST(p_products_text AS JSON)) < 1 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: al menos una línea de venta';
+  END IF;
+
+  SET v_pay = CASE LOWER(TRIM(COALESCE(p_payment, 'cash')))
+    WHEN 'efectivo' THEN 'cash'
+    WHEN 'cash' THEN 'cash'
+    WHEN 'tarjeta' THEN 'card'
+    WHEN 'card' THEN 'card'
+    WHEN 'fiado' THEN 'credit'
+    WHEN 'credit' THEN 'credit'
+    ELSE 'cash'
+  END;
+
+  IF v_pay = 'credit' AND (p_customer_id IS NULL OR p_customer_id <= 0) THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: customer_id requerido para venta a crédito/fiado';
+  END IF;
+
+  START TRANSACTION;
+
+  UPDATE product_stock ps
+  INNER JOIN sale_details sd ON sd.product_id = ps.product_id AND sd.sale_id = p_sale_id
+  SET ps.quantity = ps.quantity + sd.quantity, ps.updated_at = NOW();
+
+  DELETE FROM sale_details WHERE sale_id = p_sale_id;
+
+  DROP TEMPORARY TABLE IF EXISTS tmp_sale_lines;
+  CREATE TEMPORARY TABLE tmp_sale_lines (
+    product_id INT NOT NULL PRIMARY KEY,
+    quantity INT NOT NULL,
+    unit_price NUMERIC(14, 4) NOT NULL
+  ) ENGINE = MEMORY;
+
+  SELECT COUNT(*) INTO v_bad
+  FROM JSON_TABLE(
+    CAST(p_products_text AS JSON),
+    '$[*]' COLUMNS (
+      product_id INT PATH '$.productId',
+      qty INT PATH '$.quantity',
+      up NUMERIC(14, 4) PATH '$.unitPrice' NULL ON ERROR NULL ON EMPTY
+    )
+  ) AS jt
+  LEFT JOIN product p ON p.id = jt.product_id AND p.status = 1
+  WHERE p.id IS NULL OR jt.qty IS NULL OR jt.qty <= 0;
+
+  IF v_bad > 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: producto inválido, inactivo o cantidad inválida';
+  END IF;
+
+  INSERT INTO tmp_sale_lines (product_id, quantity, unit_price)
+  SELECT
+    jt.product_id,
+    SUM(jt.qty),
+    MAX(COALESCE(jt.up, p.sale_price))
+  FROM JSON_TABLE(
+    CAST(p_products_text AS JSON),
+    '$[*]' COLUMNS (
+      product_id INT PATH '$.productId',
+      qty INT PATH '$.quantity',
+      up NUMERIC(14, 4) PATH '$.unitPrice' NULL ON ERROR NULL ON EMPTY
+    )
+  ) AS jt
+  INNER JOIN product p ON p.id = jt.product_id AND p.status = 1
+  GROUP BY jt.product_id;
+
+  SELECT COALESCE(SUM(quantity * unit_price), 0) INTO v_computed FROM tmp_sale_lines;
+
+  IF p_total IS NOT NULL AND ABS(v_computed - p_total) > 0.02 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: total no coincide con líneas de venta';
+  END IF;
+
+  SELECT COUNT(*) INTO v_stock_miss
+  FROM tmp_sale_lines t
+  LEFT JOIN product_stock ps ON ps.product_id = t.product_id
+  WHERE ps.product_id IS NULL OR ps.quantity < t.quantity;
+
+  IF v_stock_miss > 0 THEN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_update: stock insuficiente o sin inventario';
+  END IF;
+
+  SELECT COUNT(*) INTO v_lock_n
+  FROM tmp_sale_lines t
+  INNER JOIN product_stock ps ON ps.product_id = t.product_id
+  FOR UPDATE;
+
+  UPDATE sale
+  SET
+    customer_id = NULLIF(p_customer_id, 0),
+    employee_id = p_employee_id,
+    total_amount = v_computed,
+    payment_method = v_pay,
+    updated_at = NOW()
+  WHERE id = p_sale_id;
+
+  INSERT INTO sale_details (sale_id, product_id, quantity, unit_price)
+  SELECT p_sale_id, t.product_id, t.quantity, t.unit_price
+  FROM tmp_sale_lines t;
+
+  UPDATE product_stock ps
+  INNER JOIN tmp_sale_lines t ON t.product_id = ps.product_id
+  SET ps.quantity = ps.quantity - t.quantity, ps.updated_at = NOW();
+
+  COMMIT;
+
+  SELECT p_sale_id AS sale_id, v_computed AS total_amount;
+END$$
+
+-- p_date_start, p_date_end: inicio y fin INCLUSIVOS por DATE(sale_date) (hora según @@session.time_zone).
 CREATE PROCEDURE sp_sale_list_by_date_range(
   IN p_date_start DATE,
   IN p_date_end DATE

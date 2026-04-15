@@ -1,6 +1,6 @@
 const salesRepository = require('../repositories/sales.repository')
 const customersService = require('./customers.service')
-const { badRequest } = require('../utils/httpError')
+const { badRequest, notFound } = require('../utils/httpError')
 
 function normalizeSaleLine(line) {
   if (!line || typeof line !== 'object') {
@@ -14,7 +14,7 @@ function normalizeSaleLine(line) {
   return { productId, quantity, unitPrice }
 }
 
-exports.createSale = async (data) => {
+async function prepareSalePayload(data) {
   if (!data.products || !Array.isArray(data.products) || data.products.length === 0) {
     throw badRequest('Debe incluir productos en la venta')
   }
@@ -83,53 +83,99 @@ exports.createSale = async (data) => {
     throw badRequest('Debe seleccionar un cliente para venta al fiado.')
   }
 
+  return {
+    customerId: customerId != null && Number.isFinite(customerId) ? customerId : null,
+    employeeId,
+    products,
+    total: total != null && Number.isFinite(total) ? total : null,
+    paymentMethod
+  }
+}
+
+function handleSaleProcedureError(e) {
+  if (e && typeof e.sqlMessage !== 'string' && typeof e.statusCode === 'number') {
+    throw e
+  }
+  const msg = typeof e.sqlMessage === 'string' ? e.sqlMessage : String(e.message ?? '')
+  if (msg.includes('venta no encontrada')) {
+    throw notFound('Venta no encontrada')
+  }
+  if (msg.includes('stock insuficiente') || msg.includes('sin inventario')) {
+    throw badRequest('Stock insuficiente para completar la venta.')
+  }
+  if (msg.includes('total no coincide')) {
+    throw badRequest('El total enviado no coincide con precios y cantidades.')
+  }
+  if (msg.includes('producto inválido') || msg.includes('inactivo')) {
+    throw badRequest('Hay productos inválidos o inactivos en el carrito.')
+  }
+  if (msg.includes('empleado')) {
+    throw badRequest('Empleado no válido para registrar la venta.')
+  }
+  if (msg.includes('JSON de productos')) {
+    throw badRequest('Formato de productos inválido.')
+  }
+  if (msg.includes('customer_id requerido') || msg.includes('crédito')) {
+    throw badRequest('Debe seleccionar un cliente para venta al fiado.')
+  }
+  if (msg.includes('Unknown column') && msg.toLowerCase().includes('unit_price')) {
+    throw badRequest(
+      'Falta la columna unit_price en sale_details. Ejecute en MySQL: ALTER TABLE sale_details ADD COLUMN unit_price NUMERIC(14,4) NULL AFTER quantity;'
+    )
+  }
+  if (msg.includes('doesn\'t exist') || msg.includes('no existe la tabla')) {
+    throw badRequest(
+      'Error de base de datos: verifique que existan las tablas sale, sale_details y los procedimientos de venta.'
+    )
+  }
+  throw e
+}
+
+exports.createSale = async (data) => {
+  const payload = await prepareSalePayload(data)
   try {
-    const result = await salesRepository.createSale({
-      customerId: customerId != null && Number.isFinite(customerId) ? customerId : null,
-      employeeId,
-      products,
-      total: total != null && Number.isFinite(total) ? total : null,
-      paymentMethod
-    })
+    const result = await salesRepository.createSale(payload)
 
     if (result.saleId == null) {
       throw badRequest(
-        'No se recibió el id de la venta desde la base de datos. Suele deberse a: (1) falta la columna sale_details.unit_price — ejecute db/fix_sale_details_unit_price.sql; (2) formato de respuesta del CALL — revise logs del servidor.'
+        'No se recibió el id de la venta. Revise sale_details.unit_price (db/fix_sale_details_unit_price.sql) y que sp_sale_create esté actualizado.'
       )
     }
 
     return result
   } catch (e) {
-    const msg = typeof e.sqlMessage === 'string' ? e.sqlMessage : String(e.message ?? '')
-    if (msg.includes('stock insuficiente') || msg.includes('sin inventario')) {
-      throw badRequest('Stock insuficiente para completar la venta.')
-    }
-    if (msg.includes('total no coincide')) {
-      throw badRequest('El total enviado no coincide con precios y cantidades.')
-    }
-    if (msg.includes('producto inválido') || msg.includes('inactivo')) {
-      throw badRequest('Hay productos inválidos o inactivos en el carrito.')
-    }
-    if (msg.includes('empleado')) {
-      throw badRequest('Empleado no válido para registrar la venta.')
-    }
-    if (msg.includes('JSON de productos')) {
-      throw badRequest('Formato de productos inválido.')
-    }
-    if (msg.includes('customer_id requerido') || msg.includes('crédito')) {
-      throw badRequest('Debe seleccionar un cliente para venta al fiado.')
-    }
-    if (msg.includes('Unknown column') && msg.toLowerCase().includes('unit_price')) {
+    handleSaleProcedureError(e)
+  }
+}
+
+exports.updateSale = async (saleId, data) => {
+  const id = Number(saleId)
+  if (!Number.isFinite(id) || id <= 0) {
+    throw badRequest('Identificador de venta inválido')
+  }
+  const payload = await prepareSalePayload(data)
+  try {
+    const result = await salesRepository.updateSale({ saleId: id, ...payload })
+    if (result.saleId == null) {
       throw badRequest(
-        'Falta la columna unit_price en sale_details. Ejecute en MySQL: ALTER TABLE sale_details ADD COLUMN unit_price NUMERIC(14,4) NULL AFTER quantity;'
+        'No se recibió confirmación de la venta. Revise sp_sale_update y sale_details.unit_price.'
       )
     }
-    if (msg.includes('doesn\'t exist') || msg.includes('no existe la tabla')) {
-      throw badRequest(
-        'Error de base de datos: verifique que existan las tablas sale, sale_details y el procedimiento sp_sale_create.'
-      )
-    }
-    throw e
+    return result
+  } catch (e) {
+    handleSaleProcedureError(e)
+  }
+}
+
+exports.deleteSale = async (saleId) => {
+  const id = Number(saleId)
+  if (!Number.isFinite(id) || id <= 0) {
+    throw badRequest('Identificador de venta inválido')
+  }
+  try {
+    await salesRepository.deleteSale(id)
+  } catch (e) {
+    handleSaleProcedureError(e)
   }
 }
 
