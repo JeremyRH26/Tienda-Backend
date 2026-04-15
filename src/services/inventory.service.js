@@ -25,7 +25,7 @@ exports.createCategory = async (body) => {
   }
   const id = await inventoryRepository.insertCategoryByName(name)
   if (id == null) {
-    const err = new Error('No se pudo crear ni resolver la categoría')
+    const err = new Error('No se pudo crear la categoría')
     err.statusCode = 500
     throw err
   }

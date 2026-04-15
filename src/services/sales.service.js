@@ -1,4 +1,5 @@
 const salesRepository = require('../repositories/sales.repository')
+const customersService = require('./customers.service')
 const { badRequest } = require('../utils/httpError')
 
 function normalizeSaleLine(line) {
@@ -69,6 +70,19 @@ exports.createSale = async (data) => {
   const paymentMethod =
     paymentRaw === '' ? 'efectivo' : paymentRaw
 
+  const isCredit =
+    paymentMethod === 'fiado' ||
+    paymentMethod === 'credito' ||
+    paymentMethod === 'crédito' ||
+    paymentMethod === 'credit'
+
+  if (
+    isCredit &&
+    (customerId == null || !Number.isFinite(customerId) || customerId <= 0)
+  ) {
+    throw badRequest('Debe seleccionar un cliente para venta al fiado.')
+  }
+
   try {
     const result = await salesRepository.createSale({
       customerId: customerId != null && Number.isFinite(customerId) ? customerId : null,
@@ -79,9 +93,9 @@ exports.createSale = async (data) => {
     })
 
     if (result.saleId == null) {
-      const err = new Error('No se pudo obtener el id de la venta')
-      err.statusCode = 500
-      throw err
+      throw badRequest(
+        'No se recibió el id de la venta desde la base de datos. Suele deberse a: (1) falta la columna sale_details.unit_price — ejecute db/fix_sale_details_unit_price.sql; (2) formato de respuesta del CALL — revise logs del servidor.'
+      )
     }
 
     return result
@@ -102,6 +116,131 @@ exports.createSale = async (data) => {
     if (msg.includes('JSON de productos')) {
       throw badRequest('Formato de productos inválido.')
     }
+    if (msg.includes('customer_id requerido') || msg.includes('crédito')) {
+      throw badRequest('Debe seleccionar un cliente para venta al fiado.')
+    }
+    if (msg.includes('Unknown column') && msg.toLowerCase().includes('unit_price')) {
+      throw badRequest(
+        'Falta la columna unit_price en sale_details. Ejecute en MySQL: ALTER TABLE sale_details ADD COLUMN unit_price NUMERIC(14,4) NULL AFTER quantity;'
+      )
+    }
+    if (msg.includes('doesn\'t exist') || msg.includes('no existe la tabla')) {
+      throw badRequest(
+        'Error de base de datos: verifique que existan las tablas sale, sale_details y el procedimiento sp_sale_create.'
+      )
+    }
     throw e
   }
+}
+
+function mapSaleHeaderRow(r) {
+  return {
+    id: Number(r.id),
+    customerId:
+      r.customer_id != null && r.customer_id !== ''
+        ? Number(r.customer_id)
+        : null,
+    customerName:
+      r.customer_name != null && String(r.customer_name).trim() !== ''
+        ? String(r.customer_name)
+        : null,
+    employeeId: Number(r.employee_id),
+    employeeName: r.employee_name != null ? String(r.employee_name) : '',
+    saleDate: r.sale_date,
+    totalAmount: Number(r.total_amount ?? 0),
+    paymentMethod: String(r.payment_method ?? 'cash'),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+exports.listSalesByDateRange = async (dateStart, dateEnd) => {
+  const rows = await salesRepository.listSalesByDateRange(dateStart, dateEnd)
+  return (Array.isArray(rows) ? rows : []).map(mapSaleHeaderRow)
+}
+
+exports.getSaleDetail = async (saleId) => {
+  const { header, lines } = await salesRepository.getSaleWithLines(saleId)
+  if (!header) {
+    const { notFound } = require('../utils/httpError')
+    throw notFound('Venta no encontrada')
+  }
+  const mappedLines = (Array.isArray(lines) ? lines : []).map((l) => ({
+    productId: l.product_id != null ? Number(l.product_id) : null,
+    productName:
+      l.product_name != null ? String(l.product_name) : '',
+    quantity: Number(l.quantity ?? 0),
+    unitPrice: Number(l.unit_price ?? 0),
+    productCostPrice:
+      l.product_cost_price != null ? Number(l.product_cost_price) : null
+  }))
+  return {
+    sale: mapSaleHeaderRow(header),
+    lines: mappedLines
+  }
+}
+
+exports.getDaySummary = async (dateYmd) => {
+  const row = await salesRepository.getDayCashTotals(dateYmd)
+  if (!row) {
+    return {
+      paidSalesTotal: 0,
+      creditSalesTotal: 0,
+      abonosTotal: 0,
+      cashInflowDay: 0
+    }
+  }
+  return {
+    paidSalesTotal: Number(
+      row.paid_sales_total ?? row.PAID_SALES_TOTAL ?? 0
+    ),
+    creditSalesTotal: Number(
+      row.credit_sales_total ?? row.CREDIT_SALES_TOTAL ?? 0
+    ),
+    abonosTotal: Number(row.abonos_total ?? row.ABONOS_TOTAL ?? 0),
+    cashInflowDay: Number(row.cash_inflow_day ?? row.CASH_INFLOW_DAY ?? 0)
+  }
+}
+
+function groupSalesWithLines(rows) {
+  const map = new Map()
+  for (const r of rows) {
+    const sid = Number(r.id)
+    if (!Number.isFinite(sid)) continue
+    if (!map.has(sid)) {
+      map.set(sid, {
+        id: sid,
+        customerId:
+          r.customer_id != null && r.customer_id !== ''
+            ? Number(r.customer_id)
+            : null,
+        customerName:
+          r.customer_name != null && String(r.customer_name).trim() !== ''
+            ? String(r.customer_name)
+            : null,
+        employeeId: Number(r.employee_id),
+        employeeName: r.employee_name != null ? String(r.employee_name) : '',
+        saleDate: r.sale_date,
+        totalAmount: Number(r.total_amount ?? 0),
+        paymentMethod: String(r.payment_method ?? 'cash'),
+        items: []
+      })
+    }
+    map.get(sid).items.push({
+      name: String(r.product_name ?? ''),
+      quantity: Number(r.quantity ?? 0),
+      price: Number(r.unit_price ?? 0)
+    })
+  }
+  return Array.from(map.values())
+}
+
+exports.listHistoryBundle = async (dateStart, dateEnd) => {
+  const rawRows = await salesRepository.listSalesWithLinesForRange(
+    dateStart,
+    dateEnd
+  )
+  const sales = groupSalesWithLines(rawRows)
+  const abonos = await customersService.listAbonosByDateRange(dateStart, dateEnd)
+  return { sales, abonos }
 }

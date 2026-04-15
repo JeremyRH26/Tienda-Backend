@@ -1,16 +1,11 @@
 -- =============================================================================
--- Inventario (product, product_category, product_stock) + ventas (sale, sale_details)
--- Mantiene stock y ventas en una sola transacción en sp_sale_create.
+-- Inventario — product, product_category, product_stock
+-- (Sin ventas: el POS está en db/ventas_stored_procedures.sql)
 --
--- Requisitos: MySQL 8+ (JSON_TABLE).
 -- Ejecutar:
---   mysql -u USER -p NOMBRE_BD < db/inventario_ventas_stored_procedures.sql
+--   mysql -u USER -p NOMBRE_BD < db/inventario_stored_procedures.sql
 --
--- Antes de ejecutar este script, si sale_details no tiene unit_price, ejecute UNA VEZ:
---   ALTER TABLE sale_details ADD COLUMN unit_price NUMERIC(14,4) NULL AFTER quantity;
--- (Si la columna ya existe, no la vuelva a agregar.)
---
--- Procedimientos inventario:
+-- Procedimientos:
 --   sp_product_category_list
 --   sp_product_category_get_or_create
 --   sp_product_insert              — crea producto + fila en product_stock
@@ -21,13 +16,6 @@
 --   sp_stock_adjust                — delta en cantidad (entradas/salidas manuales)
 --   sp_stock_set_min               — umbral mínimo
 --   sp_product_set_image_url       — actualiza solo image_url (p. ej. tras subir a R2)
---
--- Ventas:
---   sp_sale_create                 — valida stock, inserta sale + sale_details, descuenta stock
---
--- JSON de líneas de venta (desde Node, JSON.stringify):
---   [{"productId":1,"quantity":2,"unitPrice":10.5}, ...]
---   unitPrice opcional; si falta se usa product.sale_price.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -35,15 +23,12 @@
 -- -----------------------------------------------------------------------------
 ALTER TABLE product_category MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
 ALTER TABLE product MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
-ALTER TABLE sale MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
-ALTER TABLE sale_details MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT;
 
 -- -----------------------------------------------------------------------------
 -- 2) Procedimientos
 -- -----------------------------------------------------------------------------
 DELIMITER $$
 
-DROP PROCEDURE IF EXISTS sp_sale_create$$
 DROP PROCEDURE IF EXISTS sp_product_set_image_url$$
 DROP PROCEDURE IF EXISTS sp_stock_set_min$$
 DROP PROCEDURE IF EXISTS sp_stock_adjust$$
@@ -54,7 +39,6 @@ DROP PROCEDURE IF EXISTS sp_product_update$$
 DROP PROCEDURE IF EXISTS sp_product_insert$$
 DROP PROCEDURE IF EXISTS sp_product_category_get_or_create$$
 DROP PROCEDURE IF EXISTS sp_product_category_list$$
-DROP PROCEDURE IF EXISTS CreateSale$$
 
 CREATE PROCEDURE sp_product_category_list()
 BEGIN
@@ -356,156 +340,6 @@ BEGIN
   SELECT v_cnt AS affected;
 END$$
 
-CREATE PROCEDURE sp_sale_create(
-  IN p_customer_id BIGINT,
-  IN p_employee_id INT,
-  IN p_products_text TEXT,
-  IN p_total NUMERIC(14, 4),
-  IN p_payment VARCHAR(20)
-)
-proc: BEGIN
-  DECLARE v_sale_id BIGINT;
-  DECLARE v_pay VARCHAR(20);
-  DECLARE v_bad INT DEFAULT 0;
-  DECLARE v_computed NUMERIC(14, 4) DEFAULT 0;
-  DECLARE v_stock_miss INT DEFAULT 0;
-  DECLARE v_emp_ok INT DEFAULT 0;
-
-  DECLARE EXIT HANDLER FOR SQLEXCEPTION
-  BEGIN
-    ROLLBACK;
-    RESIGNAL;
-  END;
-
-  IF p_employee_id IS NULL OR p_employee_id <= 0 THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: employee_id requerido';
-  END IF;
-
-  SELECT COUNT(*) INTO v_emp_ok FROM employee WHERE id = p_employee_id AND status = 1;
-  IF v_emp_ok = 0 THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: empleado no válido o inactivo';
-  END IF;
-
-  IF p_products_text IS NULL OR TRIM(p_products_text) = '' THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: productos requeridos';
-  END IF;
-
-  IF JSON_VALID(p_products_text) = 0 OR JSON_TYPE(CAST(p_products_text AS JSON)) <> 'ARRAY' THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: JSON de productos inválido';
-  END IF;
-
-  IF JSON_LENGTH(CAST(p_products_text AS JSON)) < 1 THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: al menos una línea de venta';
-  END IF;
-
-  SET v_pay = CASE LOWER(TRIM(COALESCE(p_payment, 'cash')))
-    WHEN 'efectivo' THEN 'cash'
-    WHEN 'cash' THEN 'cash'
-    WHEN 'tarjeta' THEN 'card'
-    WHEN 'card' THEN 'card'
-    WHEN 'fiado' THEN 'credit'
-    WHEN 'credit' THEN 'credit'
-    ELSE 'cash'
-  END;
-
-  START TRANSACTION;
-
-  DROP TEMPORARY TABLE IF EXISTS tmp_sale_lines;
-  CREATE TEMPORARY TABLE tmp_sale_lines (
-    product_id INT NOT NULL PRIMARY KEY,
-    quantity INT NOT NULL,
-    unit_price NUMERIC(14, 4) NOT NULL
-  ) ENGINE = MEMORY;
-
-  SELECT COUNT(*) INTO v_bad
-  FROM JSON_TABLE(
-    CAST(p_products_text AS JSON),
-    '$[*]' COLUMNS (
-      product_id INT PATH '$.productId',
-      qty INT PATH '$.quantity',
-      up NUMERIC(14, 4) PATH '$.unitPrice' NULL ON ERROR NULL ON EMPTY
-    )
-  ) AS jt
-  LEFT JOIN product p ON p.id = jt.product_id AND p.status = 1
-  WHERE p.id IS NULL OR jt.qty IS NULL OR jt.qty <= 0;
-
-  IF v_bad > 0 THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: producto inválido, inactivo o cantidad inválida';
-  END IF;
-
-  INSERT INTO tmp_sale_lines (product_id, quantity, unit_price)
-  SELECT
-    jt.product_id,
-    SUM(jt.qty),
-    MAX(COALESCE(jt.up, p.sale_price))
-  FROM JSON_TABLE(
-    CAST(p_products_text AS JSON),
-    '$[*]' COLUMNS (
-      product_id INT PATH '$.productId',
-      qty INT PATH '$.quantity',
-      up NUMERIC(14, 4) PATH '$.unitPrice' NULL ON ERROR NULL ON EMPTY
-    )
-  ) AS jt
-  INNER JOIN product p ON p.id = jt.product_id AND p.status = 1
-  GROUP BY jt.product_id;
-
-  SELECT COALESCE(SUM(quantity * unit_price), 0) INTO v_computed FROM tmp_sale_lines;
-
-  IF p_total IS NOT NULL AND ABS(v_computed - p_total) > 0.02 THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: total no coincide con líneas de venta';
-  END IF;
-
-  SELECT COUNT(*) INTO v_stock_miss
-  FROM tmp_sale_lines t
-  LEFT JOIN product_stock ps ON ps.product_id = t.product_id
-  WHERE ps.product_id IS NULL OR ps.quantity < t.quantity;
-
-  IF v_stock_miss > 0 THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'sp_sale_create: stock insuficiente o sin inventario';
-  END IF;
-
-  SELECT t.product_id
-  FROM tmp_sale_lines t
-  INNER JOIN product_stock ps ON ps.product_id = t.product_id
-  FOR UPDATE;
-
-  INSERT INTO sale (customer_id, employee_id, sale_date, total_amount, payment_method, created_at, updated_at)
-  VALUES (
-    NULLIF(p_customer_id, 0),
-    p_employee_id,
-    NOW(),
-    v_computed,
-    v_pay,
-    NOW(),
-    NOW()
-  );
-
-  SET v_sale_id = LAST_INSERT_ID();
-
-  INSERT INTO sale_details (sale_id, product_id, quantity, unit_price)
-  SELECT v_sale_id, t.product_id, t.quantity, t.unit_price
-  FROM tmp_sale_lines t;
-
-  UPDATE product_stock ps
-  INNER JOIN tmp_sale_lines t ON t.product_id = ps.product_id
-  SET ps.quantity = ps.quantity - t.quantity, ps.updated_at = NOW();
-
-  COMMIT;
-
-  SELECT v_sale_id AS sale_id, v_computed AS total_amount;
-END$$
-
--- Compatibilidad con código antiguo: 3 parámetros (empleado activo más antiguo por id)
-CREATE PROCEDURE CreateSale(IN p_customer_id BIGINT, IN p_products TEXT, IN p_total NUMERIC(14, 4))
-BEGIN
-  DECLARE v_emp INT DEFAULT NULL;
-  SELECT id INTO v_emp FROM employee WHERE status = 1 ORDER BY id ASC LIMIT 1;
-  IF v_emp IS NULL THEN
-    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CreateSale: no hay empleado activo';
-  END IF;
-  CALL sp_sale_create(p_customer_id, v_emp, p_products, p_total, 'cash');
-END$$
-
 DELIMITER ;
 
 -- =============================================================================
@@ -518,7 +352,4 @@ DELIMITER ;
 -- CALL sp_product_get_by_id(1);
 -- CALL sp_stock_adjust(1, -5);
 -- CALL sp_stock_set_min(1, 3);
---
--- Venta (JSON como texto):
--- CALL sp_sale_create(1, 1, '[{"productId":1,"quantity":2}]', 20.00, 'efectivo');
 -- =============================================================================
