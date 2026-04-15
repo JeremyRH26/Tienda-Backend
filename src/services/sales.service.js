@@ -290,3 +290,123 @@ exports.listHistoryBundle = async (dateStart, dateEnd) => {
   const abonos = await customersService.listAbonosByDateRange(dateStart, dateEnd)
   return { sales, abonos }
 }
+
+function roundMoney(x) {
+  return Math.round(Number(x) * 100) / 100
+}
+
+function paidAtToYmd(paidAt) {
+  if (!paidAt) return ''
+  const d = paidAt instanceof Date ? paidAt : new Date(paidAt)
+  if (Number.isNaN(d.getTime())) {
+    const s = String(paidAt)
+    return s.length >= 10 ? s.slice(0, 10) : s
+  }
+  const tz = process.env.DB_TIMEZONE || 'America/Guatemala'
+  try {
+    return d.toLocaleDateString('en-CA', { timeZone: tz })
+  } catch {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+}
+
+/**
+ * Desglose del periodo: ventas cobradas (efectivo/tarjeta) con costo y margen,
+ * más abonos del periodo repartidos FIFO contra facturas al fiado (capital vs ganancia).
+ */
+exports.getPeriodFinancialBreakdown = async (dateStart, dateEnd) => {
+  const ds = String(dateStart ?? '').trim()
+  const de = String(dateEnd ?? '').trim()
+  if (!ds || !de || de < ds) {
+    throw badRequest('Parámetros dateStart y dateEnd inválidos')
+  }
+
+  const paid = await salesRepository.getPaidSalesRevenueCostMarginInRange(ds, de)
+  const invRows = await salesRepository.listCreditInvoicesWithCost()
+  const abonoRows = await salesRepository.listAllAbonosChronological()
+
+  const queues = new Map()
+  for (const row of invRows) {
+    const cid = Number(row.customer_id ?? row.CUSTOMER_ID)
+    if (!Number.isFinite(cid) || cid <= 0) continue
+    if (!queues.has(cid)) queues.set(cid, [])
+    const invoiceTotal = roundMoney(row.invoice_total ?? row.INVOICE_TOTAL ?? 0)
+    const linesCost = roundMoney(row.lines_cost ?? row.LINES_COST ?? 0)
+    queues.get(cid).push({
+      invoiceTotal,
+      linesCost,
+      remaining: invoiceTotal
+    })
+  }
+
+  let abonoCount = 0
+  let abonoCash = 0
+  let abonoCostRecovery = 0
+  let abonoMarginRecovery = 0
+
+  for (const a of abonoRows) {
+    const cid = Number(a.customer_id ?? a.CUSTOMER_ID)
+    let amt = roundMoney(a.amount ?? a.AMOUNT ?? 0)
+    if (!Number.isFinite(amt) || amt <= 0) continue
+    const origAmt = amt
+    const q = queues.get(cid)
+    let costPart = 0
+    let marginPart = 0
+    if (q && q.length > 0) {
+      while (amt > 0.0001 && q.length > 0) {
+        const inv = q[0]
+        const pay = roundMoney(Math.min(amt, inv.remaining))
+        const denom = inv.invoiceTotal > 0 ? inv.invoiceTotal : 1
+        const c = roundMoney(pay * (inv.linesCost / denom))
+        costPart += c
+        marginPart += roundMoney(pay - c)
+        inv.remaining = roundMoney(inv.remaining - pay)
+        amt = roundMoney(amt - pay)
+        if (inv.remaining <= 0.0001) q.shift()
+      }
+    }
+    if (amt > 0.0001) {
+      marginPart += amt
+    }
+    const ymd = paidAtToYmd(a.paid_at ?? a.PAID_AT)
+    if (ymd && ymd >= ds && ymd <= de) {
+      abonoCount += 1
+      abonoCash += origAmt
+      abonoCostRecovery += costPart
+      abonoMarginRecovery += marginPart
+    }
+  }
+
+  abonoCash = roundMoney(abonoCash)
+  abonoCostRecovery = roundMoney(abonoCostRecovery)
+  abonoMarginRecovery = roundMoney(abonoMarginRecovery)
+
+  const paidRev = roundMoney(paid.revenue)
+  const paidCost = roundMoney(paid.cost)
+  const paidMargin = roundMoney(paid.margin)
+
+  return {
+    dateStart: ds,
+    dateEnd: de,
+    paidSales: {
+      count: paid.saleCount,
+      revenue: paidRev,
+      cost: paidCost,
+      margin: paidMargin
+    },
+    abonosInPeriod: {
+      count: abonoCount,
+      cash: abonoCash,
+      costRecovery: abonoCostRecovery,
+      marginRecovery: abonoMarginRecovery
+    },
+    totals: {
+      revenue: roundMoney(paidRev + abonoCash),
+      cost: roundMoney(paidCost + abonoCostRecovery),
+      margin: roundMoney(paidMargin + abonoMarginRecovery)
+    }
+  }
+}

@@ -4,6 +4,7 @@ const salesController = require('../controllers/sales.controller')
 
 router.get('/summary/day', salesController.daySummary)
 router.get('/history', salesController.listHistory)
+router.get('/period-financials', salesController.periodFinancialBreakdown)
 router.get('/', salesController.listSales)
 router.put('/:id', salesController.updateSale)
 router.delete('/:id', salesController.deleteSale)

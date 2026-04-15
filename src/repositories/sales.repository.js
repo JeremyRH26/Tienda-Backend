@@ -166,3 +166,60 @@ exports.getDayCashTotals = async (dayYmd) => {
   const rows = firstResultSetRows(sets)
   return rows[0] ?? null
 }
+
+/** Ventas efectivo/tarjeta en rango: ingreso, costo (capital) y ganancia. */
+exports.getPaidSalesRevenueCostMarginInRange = async (dateStart, dateEnd) => {
+  const [rows] = await db.query(
+    `SELECT
+       COUNT(DISTINCT s.id) AS sale_count,
+       COALESCE(SUM(sd.quantity * sd.unit_price), 0) AS revenue,
+       COALESCE(SUM(sd.quantity * COALESCE(p.cost_price, 0)), 0) AS cost
+     FROM sale s
+     INNER JOIN sale_details sd ON sd.sale_id = s.id
+     LEFT JOIN product p ON p.id = sd.product_id
+     WHERE DATE(s.sale_date) BETWEEN ? AND ?
+       AND s.payment_method IN ('cash', 'card')`,
+    [dateStart, dateEnd]
+  )
+  const r = rows[0] ?? {}
+  const revenue = Number(r.revenue ?? r.REVENUE ?? 0)
+  const cost = Number(r.cost ?? r.COST ?? 0)
+  const saleCount = Number(r.sale_count ?? r.SALE_COUNT ?? 0)
+  return {
+    saleCount: Number.isFinite(saleCount) ? saleCount : 0,
+    revenue,
+    cost,
+    margin: revenue - cost
+  }
+}
+
+/** Facturas a crédito con costo de líneas (para repartir abonos FIFO). */
+exports.listCreditInvoicesWithCost = async () => {
+  const [rows] = await db.query(
+    `SELECT
+       s.id AS sale_id,
+       s.customer_id,
+       s.sale_date,
+       s.total_amount AS invoice_total,
+       COALESCE(SUM(sd.quantity * COALESCE(p.cost_price, 0)), 0) AS lines_cost
+     FROM sale s
+     INNER JOIN sale_details sd ON sd.sale_id = s.id
+     LEFT JOIN product p ON p.id = sd.product_id
+     WHERE s.payment_method = 'credit'
+       AND s.customer_id IS NOT NULL
+     GROUP BY s.id, s.customer_id, s.sale_date, s.total_amount
+     ORDER BY s.customer_id ASC, s.sale_date ASC, s.id ASC`
+  )
+  return Array.isArray(rows) ? rows : []
+}
+
+/** Abonos (transaction_type = 1) en orden cronológico. */
+exports.listAllAbonosChronological = async () => {
+  const [rows] = await db.query(
+    `SELECT id, customer_id, amount, paid_at
+     FROM customer_account
+     WHERE transaction_type = 1
+     ORDER BY paid_at ASC, id ASC`
+  )
+  return Array.isArray(rows) ? rows : []
+}

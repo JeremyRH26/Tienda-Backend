@@ -51,6 +51,25 @@ exports.listHistory = async (req, res, next) => {
   }
 }
 
+exports.periodFinancialBreakdown = async (req, res, next) => {
+  try {
+    const dateStart = req.query.dateStart
+    const dateEnd = req.query.dateEnd
+    if (!dateStart || !dateEnd) {
+      const err = new Error('Parámetros dateStart y dateEnd son obligatorios (YYYY-MM-DD)')
+      err.statusCode = 400
+      throw err
+    }
+    const data = await salesService.getPeriodFinancialBreakdown(
+      String(dateStart),
+      String(dateEnd)
+    )
+    res.json({ message: 'Desglose financiero del periodo', data })
+  } catch (e) {
+    next(e)
+  }
+}
+
 exports.getSaleById = async (req, res, next) => {
   try {
     const data = await salesService.getSaleDetail(req.params.id)
