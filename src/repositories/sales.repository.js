@@ -8,6 +8,50 @@ function firstResultSetRows(sets) {
   return Array.isArray(first) ? first : []
 }
 
+/** Fila tipo OkPacket/ResultSetHeader de mysql2 (no es un registro SELECT). */
+function isServerResultMetaRow(row) {
+  if (!row || typeof row !== 'object') return false
+  if ('sale_id' in row || 'SALE_ID' in row) return false
+  return typeof row.affectedRows === 'number'
+}
+
+/**
+ * sp_sale_create devuelve antes un SELECT ... FOR UPDATE (filas con product_id).
+ * El resultado final con sale_id / total_amount va en otro bloque; hay que localizarlo.
+ */
+function extractSaleCreateResultRows(raw) {
+  if (!raw || !Array.isArray(raw) || raw.length === 0) {
+    return []
+  }
+  for (let i = 0; i < raw.length; i += 1) {
+    const part = raw[i]
+    if (!Array.isArray(part) || part.length === 0) continue
+    const r0 = part[0]
+    if (!r0 || typeof r0 !== 'object' || isServerResultMetaRow(r0)) continue
+    if ('sale_id' in r0 || 'SALE_ID' in r0) {
+      return part
+    }
+  }
+  const head = raw[0]
+  if (
+    head &&
+    typeof head === 'object' &&
+    !Array.isArray(head) &&
+    !isServerResultMetaRow(head) &&
+    ('sale_id' in head || 'SALE_ID' in head)
+  ) {
+    return [head]
+  }
+  return []
+}
+
+function procedureResultSets(sets) {
+  if (!Array.isArray(sets)) {
+    return []
+  }
+  return sets.map((s) => (Array.isArray(s) ? s : []))
+}
+
 exports.getDefaultEmployeeId = async () => {
   const [rows] = await db.query(
     'SELECT id FROM employee WHERE status = 1 ORDER BY id ASC LIMIT 1'
@@ -23,7 +67,7 @@ exports.createSale = async ({
   total,
   paymentMethod
 }) => {
-  const [sets] = await db.query('CALL sp_sale_create(?, ?, ?, ?, ?)', [
+  const [raw] = await db.query('CALL sp_sale_create(?, ?, ?, ?, ?)', [
     customerId != null && customerId !== '' ? Number(customerId) : null,
     Number(employeeId),
     JSON.stringify(products),
@@ -31,20 +75,151 @@ exports.createSale = async ({
     paymentMethod ?? 'cash'
   ])
 
-  const rows = firstResultSetRows(sets)
+  const rows = extractSaleCreateResultRows(raw)
   const row = rows[0] ?? {}
+  const sid = row.sale_id ?? row.SALE_ID
+  const tam = row.total_amount ?? row.TOTAL_AMOUNT
   return {
-    saleId:
-      row.sale_id != null
-        ? Number(row.sale_id)
-        : row.SALE_ID != null
-          ? Number(row.SALE_ID)
-          : null,
-    totalAmount:
-      row.total_amount != null
-        ? Number(row.total_amount)
-        : row.TOTAL_AMOUNT != null
-          ? Number(row.TOTAL_AMOUNT)
-          : null
+    saleId: sid != null && sid !== '' ? Number(sid) : null,
+    totalAmount: tam != null && tam !== '' ? Number(tam) : null
   }
+}
+
+exports.updateSale = async ({
+  saleId,
+  customerId,
+  employeeId,
+  products,
+  total,
+  paymentMethod
+}) => {
+  const [raw] = await db.query('CALL sp_sale_update(?, ?, ?, ?, ?, ?)', [
+    Number(saleId),
+    customerId != null && customerId !== '' ? Number(customerId) : null,
+    Number(employeeId),
+    JSON.stringify(products),
+    total != null && total !== '' ? Number(total) : null,
+    paymentMethod ?? 'cash'
+  ])
+  const rows = extractSaleCreateResultRows(raw)
+  const row = rows[0] ?? {}
+  const sid = row.sale_id ?? row.SALE_ID
+  const tam = row.total_amount ?? row.TOTAL_AMOUNT
+  return {
+    saleId: sid != null && sid !== '' ? Number(sid) : null,
+    totalAmount: tam != null && tam !== '' ? Number(tam) : null
+  }
+}
+
+exports.deleteSale = async (saleId) => {
+  await db.query('CALL sp_sale_delete(?)', [Number(saleId)])
+}
+
+exports.listSalesByDateRange = async (dateStart, dateEnd) => {
+  const [sets] = await db.query('CALL sp_sale_list_by_date_range(?, ?)', [
+    dateStart,
+    dateEnd
+  ])
+  return firstResultSetRows(sets)
+}
+
+/** Una fila por línea de detalle; agrupar en el servicio por id de venta. */
+exports.listSalesWithLinesForRange = async (dateStart, dateEnd) => {
+  const [rows] = await db.query(
+    `SELECT
+       s.id,
+       s.customer_id,
+       c.full_name AS customer_name,
+       s.employee_id,
+       e.full_name AS employee_name,
+       s.sale_date,
+       s.total_amount,
+       s.payment_method,
+       sd.quantity,
+       sd.unit_price,
+       COALESCE(p.name, CONCAT('Producto #', sd.product_id)) AS product_name
+     FROM sale s
+     INNER JOIN employee e ON e.id = s.employee_id
+     LEFT JOIN customer c ON c.id = s.customer_id
+     INNER JOIN sale_details sd ON sd.sale_id = s.id
+     LEFT JOIN product p ON p.id = sd.product_id
+     WHERE DATE(s.sale_date) BETWEEN ? AND ?
+     ORDER BY s.sale_date DESC, s.id DESC, sd.id ASC`,
+    [dateStart, dateEnd]
+  )
+  return Array.isArray(rows) ? rows : []
+}
+
+exports.getSaleWithLines = async (saleId) => {
+  const [sets] = await db.query('CALL sp_sale_get_full(?)', [Number(saleId)])
+  const parts = procedureResultSets(sets)
+  const headerRows = parts[0] ?? []
+  const lineRows = parts[1] ?? []
+  return {
+    header: headerRows[0] ?? null,
+    lines: Array.isArray(lineRows) ? lineRows : []
+  }
+}
+
+exports.getDayCashTotals = async (dayYmd) => {
+  const [sets] = await db.query('CALL sp_pos_day_cash_totals(?)', [dayYmd])
+  const rows = firstResultSetRows(sets)
+  return rows[0] ?? null
+}
+
+/** Ventas efectivo/tarjeta en rango: ingreso, costo (capital) y ganancia. */
+exports.getPaidSalesRevenueCostMarginInRange = async (dateStart, dateEnd) => {
+  const [rows] = await db.query(
+    `SELECT
+       COUNT(DISTINCT s.id) AS sale_count,
+       COALESCE(SUM(sd.quantity * sd.unit_price), 0) AS revenue,
+       COALESCE(SUM(sd.quantity * COALESCE(p.cost_price, 0)), 0) AS cost
+     FROM sale s
+     INNER JOIN sale_details sd ON sd.sale_id = s.id
+     LEFT JOIN product p ON p.id = sd.product_id
+     WHERE DATE(s.sale_date) BETWEEN ? AND ?
+       AND s.payment_method IN ('cash', 'card')`,
+    [dateStart, dateEnd]
+  )
+  const r = rows[0] ?? {}
+  const revenue = Number(r.revenue ?? r.REVENUE ?? 0)
+  const cost = Number(r.cost ?? r.COST ?? 0)
+  const saleCount = Number(r.sale_count ?? r.SALE_COUNT ?? 0)
+  return {
+    saleCount: Number.isFinite(saleCount) ? saleCount : 0,
+    revenue,
+    cost,
+    margin: revenue - cost
+  }
+}
+
+/** Facturas a crédito con costo de líneas (para repartir abonos FIFO). */
+exports.listCreditInvoicesWithCost = async () => {
+  const [rows] = await db.query(
+    `SELECT
+       s.id AS sale_id,
+       s.customer_id,
+       s.sale_date,
+       s.total_amount AS invoice_total,
+       COALESCE(SUM(sd.quantity * COALESCE(p.cost_price, 0)), 0) AS lines_cost
+     FROM sale s
+     INNER JOIN sale_details sd ON sd.sale_id = s.id
+     LEFT JOIN product p ON p.id = sd.product_id
+     WHERE s.payment_method = 'credit'
+       AND s.customer_id IS NOT NULL
+     GROUP BY s.id, s.customer_id, s.sale_date, s.total_amount
+     ORDER BY s.customer_id ASC, s.sale_date ASC, s.id ASC`
+  )
+  return Array.isArray(rows) ? rows : []
+}
+
+/** Abonos (transaction_type = 1) en orden cronológico. */
+exports.listAllAbonosChronological = async () => {
+  const [rows] = await db.query(
+    `SELECT id, customer_id, amount, paid_at
+     FROM customer_account
+     WHERE transaction_type = 1
+     ORDER BY paid_at ASC, id ASC`
+  )
+  return Array.isArray(rows) ? rows : []
 }
