@@ -137,7 +137,8 @@ exports.listSalesWithLinesForRange = async (dateStart, dateEnd) => {
        s.payment_method,
        sd.quantity,
        sd.unit_price,
-       COALESCE(p.name, CONCAT('Producto #', sd.product_id)) AS product_name
+       COALESCE(p.name, CONCAT('Producto #', sd.product_id)) AS product_name,
+       p.image_url AS image_url
      FROM sale s
      INNER JOIN employee e ON e.id = s.employee_id
      LEFT JOIN customer c ON c.id = s.customer_id

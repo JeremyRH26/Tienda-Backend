@@ -272,10 +272,16 @@ function groupSalesWithLines(rows) {
         items: []
       })
     }
+    const imgRaw = r.image_url ?? r.IMAGE_URL
+    const imageUrl =
+      imgRaw != null && String(imgRaw).trim() !== ''
+        ? String(imgRaw).trim()
+        : null
     map.get(sid).items.push({
       name: String(r.product_name ?? ''),
       quantity: Number(r.quantity ?? 0),
-      price: Number(r.unit_price ?? 0)
+      price: Number(r.unit_price ?? 0),
+      imageUrl
     })
   }
   return Array.from(map.values())
